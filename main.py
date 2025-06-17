@@ -47,7 +47,8 @@ def get_domain(url):
     ext = tldextract.extract(url)
     return f"{ext.domain}.{ext.suffix}"
 
-def crawl_site(url, base_domain, max_pages=None):
+
+def crawl_site(url, base_domain):
     to_visit = [url]
     visited = set()
     html_content = []
@@ -59,11 +60,6 @@ def crawl_site(url, base_domain, max_pages=None):
         if current_url in visited:
             continue
         visited.add(current_url)
-
-        # Optional limit
-        if max_pages and len(visited) >= max_pages:
-            logger.warning(f"⚠️ Reached page limit of {max_pages}, stopping crawl.")
-            break
 
         try:
             response = requests.get(current_url, timeout=10)
@@ -122,13 +118,11 @@ def safe_parse_csv(raw_csv: str):
     try:
         raw_csv = raw_csv.strip()
 
-        # Remove markdown if present
         if raw_csv.startswith("```"):
             raw_csv = raw_csv.strip("`").split("csv")[-1].strip()
 
         lines = raw_csv.splitlines()
 
-        # Fix headers if necessary
         if not lines or "question" not in lines[0].lower() or "answer" not in lines[0].lower():
             logger.warning("⚠️ Missing or incorrect headers, attempting to fix...")
             lines.insert(0, "question,answer")
@@ -169,9 +163,9 @@ def scrape_and_generate_faqs(input_data: URLInput):
         raise HTTPException(status_code=400, detail="URL must start with http or https.")
 
     base_domain = get_domain(url)
-    logger.info(f"🕸️ Crawling domain: {base_domain} (limit: 50 pages)...")
+    logger.info(f"🕸️ Crawling domain: {base_domain} (no page limit)...")
 
-    raw_text = crawl_site(url, base_domain, max_pages=50)
+    raw_text = crawl_site(url, base_domain)
     if not raw_text:
         raise HTTPException(status_code=500, detail="Failed to crawl site or extract text.")
 
@@ -182,13 +176,11 @@ def scrape_and_generate_faqs(input_data: URLInput):
     if not faqs:
         raise HTTPException(status_code=500, detail="Could not parse cleaned CSV.")
 
-    # Write to in-memory CSV
     csv_buffer = io.StringIO()
     writer = csv.DictWriter(csv_buffer, fieldnames=["question", "answer"])
     writer.writeheader()
     writer.writerows(faqs)
 
-    # Upload to GCS
     bucket_name = os.getenv("GCS_BUCKET_NAME")
     gcs_path = upload_to_gcs(bucket_name, "faq/faq_scraped.csv", csv_buffer.getvalue())
 
