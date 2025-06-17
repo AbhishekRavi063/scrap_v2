@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from bs4 import BeautifulSoup
 import requests
@@ -13,12 +13,12 @@ import io
 from google.cloud import storage
 import base64
 import tempfile
-import uvicorn  # Add this
+import uvicorn
 
 # Load environment variables
 load_dotenv()
 
-# Decode and configure Google Cloud credentials if using base64 env var
+# Decode Google Cloud credentials
 creds_b64 = os.getenv("GOOGLE_CREDS_B64")
 if creds_b64:
     with tempfile.NamedTemporaryFile(delete=False, mode='w') as temp_file:
@@ -28,14 +28,13 @@ if creds_b64:
 # OpenAI client setup
 client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# FastAPI app
-app = FastAPI()
-
 # Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
-# Input model
+# FastAPI app
+app = FastAPI()
+
 class URLInput(BaseModel):
     url: str
 
@@ -144,20 +143,19 @@ def upload_to_gcs(bucket_name: str, destination_blob_name: str, source_data: str
         logger.error(f"❌ Failed to upload to GCS: {e}")
         raise HTTPException(status_code=500, detail="GCS upload failed.")
 
-@app.post("/scrape")
-def scrape_and_generate_faqs(input_data: URLInput):
-    logger.info(f"📅 /scrape endpoint called with URL: {input_data.url}")
+def scrape_and_generate_faqs_task(url: str):
+    logger.info(f"📅 Background scrape started for URL: {url}")
 
-    url = input_data.url
     if not is_valid_url(url):
-        raise HTTPException(status_code=400, detail="URL must start with http or https.")
+        logger.error("❌ Invalid URL")
+        return
 
     base_domain = get_domain(url)
-    logger.info(f"🕸️ Crawling domain: {base_domain}...")
-
     pages = crawl_site(url, base_domain)
+
     if not pages:
-        raise HTTPException(status_code=500, detail="Failed to crawl site or extract content.")
+        logger.error("❌ No pages found during crawl")
+        return
 
     all_faqs = []
 
@@ -169,7 +167,8 @@ def scrape_and_generate_faqs(input_data: URLInput):
             all_faqs.extend(faqs)
 
     if not all_faqs:
-        raise HTTPException(status_code=500, detail="Could not extract any FAQs from the site.")
+        logger.error("❌ No FAQs extracted")
+        return
 
     csv_buffer = io.StringIO()
     writer = csv.DictWriter(csv_buffer, fieldnames=["question", "answer"])
@@ -177,14 +176,17 @@ def scrape_and_generate_faqs(input_data: URLInput):
     writer.writerows(all_faqs)
 
     bucket_name = os.getenv("GCS_BUCKET_NAME")
-    gcs_path = upload_to_gcs(bucket_name, "faq/faq_scraped.csv", csv_buffer.getvalue())
+    upload_to_gcs(bucket_name, "faq/faq_scraped.csv", csv_buffer.getvalue())
 
-    return {
-        "message": f"✅ Extracted {len(all_faqs)} FAQs from {len(pages)} pages.",
-        "gcs_path": gcs_path
-    }
+@app.post("/scrape")
+def scrape_endpoint(input_data: URLInput, background_tasks: BackgroundTasks):
+    background_tasks.add_task(scrape_and_generate_faqs_task, input_data.url)
+    return {"message": "✅ Scraping started in background."}
 
-# Render-specific entry point
+@app.get("/")
+def health_check():
+    return {"status": "OK"}
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
