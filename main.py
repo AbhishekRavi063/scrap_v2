@@ -47,8 +47,7 @@ def get_domain(url):
     ext = tldextract.extract(url)
     return f"{ext.domain}.{ext.suffix}"
 
-
-def crawl_site(url, base_domain):
+def crawl_site(url, base_domain, max_pages=None):
     to_visit = [url]
     visited = set()
     html_content = []
@@ -60,6 +59,11 @@ def crawl_site(url, base_domain):
         if current_url in visited:
             continue
         visited.add(current_url)
+
+        # Optional limit
+        if max_pages and len(visited) >= max_pages:
+            logger.warning(f"⚠️ Reached page limit of {max_pages}, stopping crawl.")
+            break
 
         try:
             response = requests.get(current_url, timeout=10)
