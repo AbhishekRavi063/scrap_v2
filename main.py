@@ -379,7 +379,13 @@ def scrape_and_generate_faqs_task(url: str):
     csv_buffer = io.StringIO()
     writer = csv.DictWriter(csv_buffer, fieldnames=["question", "answer"])
     writer.writeheader()
-    writer.writerows(all_faqs)
+    fieldnames = ["question", "answer"]  # Or whatever you used
+    cleaned_faqs = [
+        {key: row.get(key, "") for key in fieldnames}
+        for row in all_faqs
+    ]
+    writer.writerows(cleaned_faqs)
+
 
     bucket_name = os.getenv("GCS_BUCKET_NAME")
     upload_to_gcs(bucket_name, "faq/faq_scraped.csv", csv_buffer.getvalue())
